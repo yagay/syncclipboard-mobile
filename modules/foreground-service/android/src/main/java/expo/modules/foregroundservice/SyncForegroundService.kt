@@ -35,6 +35,23 @@ class SyncForegroundService : Service() {
 
     private var notificationManager: NotificationManager? = null
 
+    /**
+     * Keep the user-enabled clipboard monitor in the foreground without using
+     * the time-limited dataSync service type. Actual transfers remain handled
+     * by the existing synchronization layer.
+     */
+    private fun startClipboardMonitoringForeground(notification: Notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFY_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFY_ID, notification)
+        }
+    }
+
     private fun getAppString(name: String): String {
         val resId = resources.getIdentifier(name, "string", APP_PACKAGE)
         return if (resId != 0) getString(resId) else name
@@ -66,11 +83,7 @@ class SyncForegroundService : Service() {
                 }
 
                 val notification = createNotification(getAppString("fg_notification_running"))
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    startForeground(NOTIFY_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-                } else {
-                    startForeground(NOTIFY_ID, notification)
-                }
+                startClipboardMonitoringForeground(notification)
                 NativeLogger.d(TAG, "startForeground called successfully")
                 isRunning = true
             }
@@ -79,11 +92,7 @@ class SyncForegroundService : Service() {
                 stoppedByUser = true
                 if (!isRunning) {
                     val notification = createNotification(getAppString("fg_notification_stopping"))
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        startForeground(NOTIFY_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-                    } else {
-                        startForeground(NOTIFY_ID, notification)
-                    }
+                    startClipboardMonitoringForeground(notification)
                 }
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -95,11 +104,7 @@ class SyncForegroundService : Service() {
                 stoppedByUser = true
                 if (!isRunning) {
                     val notification = createNotification(getAppString("fg_notification_stopping"))
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        startForeground(NOTIFY_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-                    } else {
-                        startForeground(NOTIFY_ID, notification)
-                    }
+                    startClipboardMonitoringForeground(notification)
                 }
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -112,11 +117,7 @@ class SyncForegroundService : Service() {
             }
             else -> {
                 val notification = createNotification(getAppString("fg_notification_running"))
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    startForeground(NOTIFY_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-                } else {
-                    startForeground(NOTIFY_ID, notification)
-                }
+                startClipboardMonitoringForeground(notification)
                 isRunning = true
             }
         }
@@ -125,38 +126,12 @@ class SyncForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /**
-     * Android 14+ 回调：dataSync 类型前台服务 6小时/24小时配额耗尽时由系统调用。
-     * 若不在此回调中及时停止，系统会强制 ANR 终止进程（不经过 onDestroy 优雅路径）。
-     * 处理同用户临时停止：通知 JS 侧重新调度，下次 App 进入前台时重启服务。
-     */
-    @androidx.annotation.RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    override fun onTimeout(startId: Int) {
-        NativeLogger.w(TAG, "dataSync foreground service timed out (6h/24h quota exhausted), stopping gracefully")
-        stoppedByUser = true
-        showRestartNotification(contentText = getAppString("fg_timeout_content"))
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
-        isRunning = false
-    }
-
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        val rootClassName = rootIntent?.component?.className.orEmpty()
-        val fromMainActivity = rootClassName.endsWith(".MainActivity")
-
-        if (!fromMainActivity) {
-            NativeLogger.d(TAG, "onTaskRemoved ignored: root=$rootClassName")
-            return
-        }
-
-        NativeLogger.d(TAG, "onTaskRemoved: user swiped app from recents, pausing background tasks")
-        stoppedByUser = true
-        isRunning = false
-        // 通知 JS 侧暂停所有后台任务（复用临时停止逻辑，回到前台自动恢复）
-        ForegroundServiceModule.sendTempStopEvent()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        // Removing the UI task is not an explicit request to disable clipboard
+        // synchronization. The permanent and temporary notification actions
+        // remain the user-controlled ways to stop the service.
+        NativeLogger.d(TAG, "onTaskRemoved: keeping clipboard monitoring active")
     }
 
     override fun onDestroy() {
