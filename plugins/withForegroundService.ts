@@ -22,7 +22,10 @@ const withForegroundService: ConfigPlugin = (config) => {
     };
 
     addPermission('android.permission.FOREGROUND_SERVICE');
-    addPermission('android.permission.FOREGROUND_SERVICE_DATA_SYNC');
+    // The foreground service keeps the user-enabled clipboard listener alive.
+    // It is not a finite data transfer, so declaring it as dataSync would make
+    // Android 15+ stop it after the platform's 6-hour quota is exhausted.
+    addPermission('android.permission.FOREGROUND_SERVICE_SPECIAL_USE');
 
     // Register Service in <application>
     const application = manifest.application?.[0];
@@ -41,9 +44,18 @@ const withForegroundService: ConfigPlugin = (config) => {
             'android:name': serviceClassName,
             'android:enabled': 'true',
             'android:exported': 'false',
-            'android:foregroundServiceType': 'dataSync',
+            'android:stopWithTask': 'false',
+            'android:foregroundServiceType': 'specialUse',
           },
-        });
+          property: [
+            {
+              $: {
+                'android:name': 'android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE',
+                'android:value': 'User-enabled continuous cross-device clipboard monitoring',
+              },
+            },
+          ],
+        } as (typeof application.service)[number]);
         console.log(`✅ Registered service: ${serviceClassName}`);
       }
     }
